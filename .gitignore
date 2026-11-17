@@ -2,6 +2,9 @@
 /zoctl
 /dist/
 
+# persona worktrees
+/.slots/
+
 # agent instructions stay local
 AGENTS.md
 CLAUDE.md
