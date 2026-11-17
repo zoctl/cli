@@ -8,12 +8,10 @@ permissions:
   contents: read
 
 jobs:
+  # Ubuntu only: every binary is cross-compiled there, and hosted macOS
+  # runners can sit queued until GitHub cancels the job. CI still tests macOS.
   test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
