@@ -38,6 +38,7 @@ fmt:
 	@files=$$(gofmt -l .) || exit 1; if [ -n "$$files" ]; then printf '%s\n' "$$files"; exit 1; fi
 
 check: fmt vet test
+	sh -n install.sh
 	@for target in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64 windows/amd64; do \
 	  GOOS=$${target%/*} GOARCH=$${target#*/} CGO_ENABLED=0 $(GO) build -trimpath -o /dev/null ./cmd/zoctl || exit 1; \
 	done

@@ -8,14 +8,21 @@ binary, no cgo.
 
 ## Install
 
-From a release: download `zoctl-<os>-<arch>` and `checksums.txt` from the
-[releases page](https://github.com/zoctl/cli/releases), check the binary
-against the file, and put it on your `PATH`:
+On Linux or macOS (amd64 or arm64):
 
 ```sh
-sha256sum -c --ignore-missing checksums.txt   # shasum -a 256 -c on macOS
-chmod +x zoctl-linux-amd64 && mv zoctl-linux-amd64 ~/.local/bin/zoctl
+curl -fsSL https://raw.githubusercontent.com/zoctl/cli/main/install.sh | sh
 ```
+
+It downloads the latest release's `zoctl-<os>-<arch>`, refuses it unless it
+matches `checksums.txt`, and puts it in `~/.local/bin`. `ZOCTL_VERSION=v0.1.0`
+picks a release and `ZOCTL_INSTALL_DIR` another folder, set on the `sh`:
+`curl ... | ZOCTL_INSTALL_DIR=/usr/local/bin sh`.
+
+By hand, or on Windows: download `zoctl-<os>-<arch>` and `checksums.txt` from
+the [releases page](https://github.com/zoctl/cli/releases), check one against
+the other (`sha256sum -c --ignore-missing checksums.txt`, `shasum -a 256 -c`
+on macOS) and put it on your `PATH`.
 
 From source, with Go installed:
 
