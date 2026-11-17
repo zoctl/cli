@@ -1,0 +1,7 @@
+# build output
+/zoctl
+/dist/
+
+# agent instructions stay local
+AGENTS.md
+CLAUDE.md
