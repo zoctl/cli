@@ -136,7 +136,7 @@ func (c *Client) StartLogin(ctx context.Context) (Start, error) {
 		return Start{}, fmt.Errorf("%w: an answer it shouldn't give", ErrUnavailable)
 	}
 	// The page to type the code on is the console's own and nowhere else.
-	if u, err := url.Parse(out.URL); err != nil || "https://"+u.Host != c.Origin || u.Scheme != "https" {
+	if u, err := url.Parse(out.URL); err != nil || "https://"+u.Host != c.Origin || u.Scheme != "https" || u.User != nil {
 		out.URL = c.Origin + "/cli"
 	}
 	if out.Interval < 1 || out.Interval > 60 {
@@ -172,8 +172,17 @@ func (c *Client) Moves(ctx context.Context) ([]Move, error) {
 	var out struct {
 		Moves []Move `json:"moves"`
 	}
-	_, err := c.do(ctx, http.MethodGet, "/v1/cli/moves", true, nil, &out)
-	return out.Moves, err
+	if _, err := c.do(ctx, http.MethodGet, "/v1/cli/moves", true, nil, &out); err != nil {
+		return nil, err
+	}
+	// An ID goes into an address and a command, so one that isn't an ID
+	// is no answer.
+	for _, m := range out.Moves {
+		if !moveID.MatchString(m.ID) {
+			return nil, fmt.Errorf("%w: an answer it shouldn't give", ErrUnavailable)
+		}
+	}
+	return out.Moves, nil
 }
 
 // Move is one move, by its full ID.
@@ -182,8 +191,13 @@ func (c *Client) Move(ctx context.Context, id string) (Move, error) {
 		return Move{}, ErrNotFound
 	}
 	var out Move
-	_, err := c.do(ctx, http.MethodGet, "/v1/cli/moves/"+id, true, nil, &out)
-	return out, err
+	if _, err := c.do(ctx, http.MethodGet, "/v1/cli/moves/"+id, true, nil, &out); err != nil {
+		return Move{}, err
+	}
+	if out.ID != id {
+		return Move{}, fmt.Errorf("%w: an answer it shouldn't give", ErrUnavailable)
+	}
+	return out, nil
 }
 
 // SignOut ends this terminal's session on the console.

@@ -31,6 +31,8 @@ type fakeConsole struct {
 	signedIn map[string]bool
 	seen     []*http.Request
 	locked   bool
+	// name is the member's name, when a test wants one of its own.
+	name string
 }
 
 func (f *fakeConsole) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -90,7 +92,11 @@ func (f *fakeConsole) serve(w http.ResponseWriter, r *http.Request) {
 		js(map[string]any{"token": token, "org": "org1", "expires": now.Add(30 * 24 * time.Hour)})
 	case "GET /v1/cli/whoami":
 		if authed() {
-			js(map[string]any{"org": "org1", "organization": "Acme", "subject": "sub1", "name": "Ada", "role": "operator", "expires": now.Add(time.Hour)})
+			name := "Ada"
+			if f.name != "" {
+				name = f.name
+			}
+			js(map[string]any{"org": "org1", "organization": "Acme", "subject": "sub1", "name": name, "role": "operator", "expires": now.Add(time.Hour)})
 		}
 	case "GET /v1/cli/moves":
 		if authed() {
@@ -386,5 +392,30 @@ func TestUsage(t *testing.T) {
 	}
 	if code := h.run("moves", "-bogus"); code != 2 {
 		t.Fatalf("bad flag: %d", code)
+	}
+}
+
+// A name is whatever someone typed on the console, and the rest of an answer
+// is the console's. Neither can drive the terminal it's printed on.
+func TestWhatTheConsoleSaysCannotDriveTheTerminal(t *testing.T) {
+	h := newHarness(t)
+	h.login(t)
+	h.fake.name = "Ada\x1b]0;owned\x07\x1b[2J\u202e\u009b31m\r\nLovelace"
+	if code := h.run("whoami"); code != 0 {
+		t.Fatalf("whoami: %d %s", code, h.err)
+	}
+	if !strings.Contains(h.out.String(), "Ada]0;owned[2J31mLovelace") {
+		t.Fatalf("the name's letters went too:\n%q", h.out)
+	}
+	for _, r := range h.out.String() {
+		if r != '\n' && (r < ' ' || r == 0x7f || (r >= 0x80 && r < 0xa0) || r == '\u202e') {
+			t.Fatalf("whoami printed %U:\n%q", r, h.out)
+		}
+	}
+	if got := plain(strings.Repeat("a", 3*maxPlain)); len(got) != maxPlain {
+		t.Fatalf("plain kept %d characters", len(got))
+	}
+	if got := plain("  Zo\u00eb Ltd.  "); got != "Zo\u00eb Ltd." {
+		t.Fatalf("plain changed a name: %q", got)
 	}
 }

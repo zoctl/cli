@@ -93,3 +93,38 @@ func TestStartLoginKeepsThePageOnTheConsole(t *testing.T) {
 		t.Fatalf("StartLogin: %+v, %v", s, err)
 	}
 }
+
+// A move's ID goes into an address and a command, so an answer whose ID isn't
+// one is no answer.
+func TestAMoveTheConsoleNamesOddlyIsRefused(t *testing.T) {
+	id := strings.Repeat("0f", 16)
+	for _, body := range []string{
+		`{"moves":[{"id":"../../signin?x"}]}`,
+		`{"moves":[{"id":"` + id + `"},{"id":""}]}`,
+	} {
+		c := client(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(body)) })
+		if list, err := c.Moves(context.Background()); !errors.Is(err, ErrUnavailable) || list != nil {
+			t.Fatalf("Moves with %s: %v, %v", body, list, err)
+		}
+	}
+	c := client(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"id":"` + strings.Repeat("1", 32) + `"}`))
+	})
+	if _, err := c.Move(context.Background(), id); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Move answered with another move: %v", err)
+	}
+	c = client(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"id":"` + id + `"}`)) })
+	if m, err := c.Move(context.Background(), id); err != nil || m.ID != id {
+		t.Fatalf("Move: %+v, %v", m, err)
+	}
+}
+
+func TestStartLoginRefusesAPageWithAUserInIt(t *testing.T) {
+	c := client(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"device":"` + strings.Repeat("d", 64) + `","code":"BCDF-GHJK","url":"https://phish.example@app.zoctl.com/cli","expires":"2026-11-20T12:10:00Z","interval":5}`))
+	})
+	s, err := c.StartLogin(context.Background())
+	if err != nil || s.URL != DefaultConsole+"/cli" {
+		t.Fatalf("StartLogin: %+v, %v", s, err)
+	}
+}

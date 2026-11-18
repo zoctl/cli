@@ -21,7 +21,7 @@ esac
 
 tag=${ZOCTL_VERSION:-}
 if [ -z "$tag" ]; then
-  latest=$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest") ||
+  latest=$(curl --proto '=https' --tlsv1.2 -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest") ||
     fail "couldn't find the latest release"
   prefix="https://github.com/$REPO/releases/tag/"
   case "$latest" in "$prefix"*) tag=${latest#"$prefix"} ;; *) fail "there's no release yet" ;; esac
@@ -31,8 +31,8 @@ case "$tag" in *[!a-zA-Z0-9.-]*) fail "not a release tag: $tag" ;; esac
 
 asset="zoctl-$os-$arch"
 base="https://github.com/$REPO/releases/download/$tag"
-curl -fsSL -o "$tmp/zoctl" "$base/$asset" || fail "couldn't download $asset $tag"
-curl -fsSL -o "$tmp/checksums.txt" "$base/checksums.txt" || fail "couldn't download checksums.txt"
+curl --proto '=https' --tlsv1.2 -fsSL -o "$tmp/zoctl" "$base/$asset" || fail "couldn't download $asset $tag"
+curl --proto '=https' --tlsv1.2 -fsSL -o "$tmp/checksums.txt" "$base/checksums.txt" || fail "couldn't download checksums.txt"
 expected=""
 while read -r digest name extra; do
   if [ "$name" = "$asset" ]; then

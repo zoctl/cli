@@ -15,6 +15,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"github.com/zoctl/cli/internal/api"
 	"github.com/zoctl/cli/internal/creds"
@@ -202,7 +203,7 @@ func (a *App) login(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(a.Stderr, "To sign this terminal in, open %s and type this code:\n\n    %s\n\n", start.URL, start.Code)
+	fmt.Fprintf(a.Stderr, "To sign this terminal in, open %s and type this code:\n\n    %s\n\n", plain(start.URL), plain(start.Code))
 	if !*noBrowser && a.Open != nil && a.Open(start.URL) == nil {
 		fmt.Fprintln(a.Stderr, "Your browser should be open on that page now.")
 	}
@@ -248,7 +249,7 @@ func (a *App) login(ctx context.Context, args []string) error {
 			fmt.Fprintln(a.Stdout, "Signed in.")
 			return nil
 		}
-		fmt.Fprintf(a.Stdout, "Signed in to %s as %s, %s.\n", orgName(who), memberName(who), who.Role)
+		fmt.Fprintf(a.Stdout, "Signed in to %s as %s, %s.\n", orgName(who), memberName(who), plain(who.Role))
 		return nil
 	}
 }
@@ -277,17 +278,40 @@ func (a *App) logout(ctx context.Context, args []string) error {
 }
 
 func orgName(w api.Who) string {
-	if w.Organization != "" {
-		return w.Organization
+	if s := plain(w.Organization); s != "" {
+		return s
 	}
-	return "organization " + w.Org
+	return "organization " + plain(w.Org)
 }
 
 func memberName(w api.Who) string {
-	if w.Name != "" {
-		return w.Name
+	if s := plain(w.Name); s != "" {
+		return s
 	}
-	return w.Subject
+	return plain(w.Subject)
+}
+
+// maxPlain is the longest a console's word is printed.
+const maxPlain = 200
+
+// plain is something the console said, safe to print: a name someone typed
+// there, or anything else in an answer. Control and formatting characters are
+// dropped, so no answer can move the cursor, recolour the screen, retitle the
+// window or reorder what's read, and it is cut at maxPlain characters. -json
+// prints the answer as it came, escaped as JSON.
+func plain(s string) string {
+	var b strings.Builder
+	n := 0
+	for _, r := range s {
+		if r == unicode.ReplacementChar || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r) {
+			continue
+		}
+		if n++; n > maxPlain {
+			break
+		}
+		b.WriteRune(r)
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func (a *App) whoami(ctx context.Context, args []string) error {
@@ -311,7 +335,7 @@ func (a *App) whoami(ctx context.Context, args []string) error {
 	fmt.Fprintf(tw, "Console\t%s\n", c.Origin)
 	fmt.Fprintf(tw, "Organization\t%s\n", orgName(w))
 	fmt.Fprintf(tw, "You\t%s\n", memberName(w))
-	role := w.Role
+	role := plain(w.Role)
 	if w.Billing {
 		role += ", with billing access"
 	}
@@ -352,7 +376,7 @@ func (a *App) moves(ctx context.Context, args []string) error {
 		if m.Attention {
 			flag = "needs attention"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d/%d\t%d\t%s\t%s\n", short(m.ID), m.Source, m.Target, m.Stage,
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d/%d\t%d\t%s\t%s\n", plain(short(m.ID)), plain(m.Source), plain(m.Target), plain(m.Stage),
 			m.Counts.Created, m.Counts.Planned, m.Counts.Alerts, ago(now, m.Received), flag)
 	}
 	return tw.Flush()
@@ -438,12 +462,12 @@ func (a *App) move(ctx context.Context, args []string) error {
 	}
 	now := a.Now()
 	tw := tabwriter.NewWriter(a.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintf(tw, "Move\t%s\n", m.ID)
-	fmt.Fprintf(tw, "From\t%s\n", m.Source)
-	fmt.Fprintf(tw, "To\t%s\n", m.Target)
-	fmt.Fprintf(tw, "Stage\t%s\n", m.Stage)
+	fmt.Fprintf(tw, "Move\t%s\n", plain(m.ID))
+	fmt.Fprintf(tw, "From\t%s\n", plain(m.Source))
+	fmt.Fprintf(tw, "To\t%s\n", plain(m.Target))
+	fmt.Fprintf(tw, "Stage\t%s\n", plain(m.Stage))
 	if m.Runner != "" {
-		fmt.Fprintf(tw, "Runner\t%s\n", m.Runner)
+		fmt.Fprintf(tw, "Runner\t%s\n", plain(m.Runner))
 	}
 	fmt.Fprintf(tw, "Last report\t%s, %s\n", ago(now, m.Received), freshness(m.Freshness))
 	ct := m.Counts
@@ -464,7 +488,7 @@ func (a *App) move(ctx context.Context, args []string) error {
 	if len(m.Findings) > 0 {
 		fmt.Fprintln(a.Stdout, "\nFindings:")
 		for _, f := range m.Findings {
-			fmt.Fprintf(a.Stdout, "  %s (%s)\n", f.Text, f.Code)
+			fmt.Fprintf(a.Stdout, "  %s (%s)\n", plain(f.Text), plain(f.Code))
 		}
 	}
 	fmt.Fprintf(a.Stdout, "\nThe plan stays on your runner. Its page in the console: %s/moves/%s\n", c.Origin, m.ID)
