@@ -19,7 +19,7 @@ matches `checksums.txt`, and puts it in `~/.local/bin`. `ZOCTL_VERSION=v0.1.0`
 picks a release and `ZOCTL_INSTALL_DIR` another folder, set on the `sh`:
 `curl ... | ZOCTL_INSTALL_DIR=/usr/local/bin sh`.
 
-By hand, or on Windows: download `zoctl-<os>-<arch>` and `checksums.txt` from
+By hand, or on Windows (`zoctl-windows-amd64.exe`): download `zoctl-<os>-<arch>` and `checksums.txt` from
 the [releases page](https://github.com/zoctl/cli/releases), check one against
 the other (`sha256sum -c --ignore-missing checksums.txt`, `shasum -a 256 -c`
 on macOS) and put it on your `PATH`.
@@ -95,8 +95,8 @@ make build        # ./zoctl
 ```
 
 Tests run against a fake console in memory, never the network. Releases are
-built by `.github/workflows/release.yml` when a `v*` tag is pushed: Linux and
-macOS binaries plus `checksums.txt`.
+built by `.github/workflows/release.yml` when a `v*` tag is pushed: Linux,
+macOS and Windows binaries plus `checksums.txt`.
 
 ## License
 
