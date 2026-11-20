@@ -84,6 +84,10 @@ func printSyncPlan(out io.Writer, p datasync.Plan, back bool) {
 			fmt.Fprintf(out, "dataset %d, objects: %d to copy back to the old side (%d bytes), %d already there, %d only on the old side and left alone\n", i+1, d.Copy, d.CopyBytes, d.Same, d.Extra)
 		case d.Kind == "objects":
 			fmt.Fprintf(out, "dataset %d, objects: %d to copy (%d bytes), %d already there, %d only on the target and left alone\n", i+1, d.Copy, d.CopyBytes, d.Same, d.Extra)
+		case d.Kind == "mysql":
+			fmt.Fprintf(out, "dataset %d, mysql: %d tables to copy and follow, %d of them to make on the target\n", i+1, d.Tables, d.Copy)
+		case d.Kind == "redis":
+			fmt.Fprintf(out, "dataset %d, redis: about %d keys to copy and follow, %d keys on the target now\n", i+1, d.Copy, d.Extra)
 		case back:
 			fmt.Fprintf(out, "dataset %d, %s: %d tables replicate back to the old side\n", i+1, d.Kind, d.Tables)
 		default:
@@ -104,12 +108,19 @@ func printSyncPlan(out io.Writer, p datasync.Plan, back bool) {
 
 func printSyncStatus(out io.Writer, st datasync.Status) {
 	for i, d := range st.Datasets {
-		if d.Kind == "postgres" {
+		switch d.Kind {
+		case "postgres":
 			// The subscription copies the rows, so there's no count of
 			// them to give: say what's still copying and how far behind.
 			fmt.Fprintf(out, "%s round %d dataset %d, postgres: tables still copying %d, tables whose row counts differ %d, lag %d bytes (%ds), verified %v\n",
 				st.Stage, st.Rounds, i+1, d.Pending, d.Extra, d.LagBytes, d.LagSeconds, d.Verified)
-		} else {
+		case "mysql":
+			fmt.Fprintf(out, "%s round %d dataset %d, mysql: rows written %d, tables whose rows differ %d, lag %d bytes (%ds), verified %v\n",
+				st.Stage, st.Rounds, i+1, d.Copied, d.Extra, d.LagBytes, d.LagSeconds, d.Verified)
+		case "redis":
+			fmt.Fprintf(out, "%s round %d dataset %d, redis: keys copied %d (%d bytes), keys that differed %d, keys only on the target %d, verified %v\n",
+				st.Stage, st.Rounds, i+1, d.Copied, d.Bytes, d.Pending, d.Extra, d.Verified)
+		default:
 			fmt.Fprintf(out, "%s round %d dataset %d: %d copied (%d bytes), %d failed, %d pending, lag %ds, verified %v\n",
 				st.Stage, st.Rounds, i+1, d.Copied, d.Bytes, d.Failed, d.Pending, d.LagSeconds, d.Verified)
 		}
@@ -150,7 +161,20 @@ func syncData(args []string, out io.Writer, in io.Reader) error {
 	if *back {
 		return syncBack(m, *dir, *every, *rounds, *only, out, in)
 	}
-	s, err := datasync.Open(m, datasync.Options{Env: moveEnv(m, false), Client: syncClient()})
+	// A database whose changes zoctl reads itself keeps how far it got in
+	// the workspace; -check writes nothing and needs none.
+	var w *transfer.Workspace
+	if !*only {
+		if *dir == "" {
+			return errConfig
+		}
+		var err error
+		if w, err = transfer.OpenWorkspace(*dir); err != nil {
+			return err
+		}
+		defer w.Close()
+	}
+	s, err := datasync.Open(m, datasync.Options{Env: moveEnv(m, false), Client: syncClient(), Workspace: w})
 	if err != nil {
 		return err
 	}
@@ -170,14 +194,6 @@ func syncData(args []string, out io.Writer, in io.Reader) error {
 		fmt.Fprintln(out, "the two sides match")
 		return nil
 	}
-	if *dir == "" {
-		return errConfig
-	}
-	w, err := transfer.OpenWorkspace(*dir)
-	if err != nil {
-		return err
-	}
-	defer w.Close()
 	if cut, err := datasync.CutOver(w); err != nil || cut {
 		fmt.Fprintln(out, "this move has cut over; a sync would copy the source's old data over the target's")
 		return datasync.ErrCutOver

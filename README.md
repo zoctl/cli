@@ -125,6 +125,32 @@ dataset. Both URLs have to say `sslmode=require`, `verify-ca` or
 `verify-full`; a URL that could fall back to plaintext is refused. zoctl makes
 the subscription on the target and, with `copy_schema`, the missing tables.
 
+A MySQL (5.7.20 or later) or MariaDB (11.1 or later) database (`"kind":
+"mysql"`, `from_env` and `to_env` as above) has no subscription a managed
+target lets anyone make, so zoctl is the replica: it copies every table
+from one consistent read of the source, then reads the source's binary log
+from just before that read and writes each transaction to the target in one
+of its own, a row at a time by its primary key. The source needs `binlog_format = ROW`, `binlog_row_image = FULL` and a
+role with `SELECT`, `REPLICATION CLIENT` and `REPLICATION SLAVE`, and every
+table needs a primary key. URLs look like
+`mysql://user:password@host:3306/shop?tls=true`, and `tls` has to be `true`
+or `skip-verify`. With `copy_schema` zoctl makes the missing tables from the
+source's `CREATE TABLE`; views, triggers, routines and users are yours. Where
+the log got to is kept in the workspace, so the next approval carries on from
+there while the source still has that log file. A table made or changed on
+the source while it syncs stops the sync, to be planned again.
+
+A Redis database (`"kind": "redis"`) can't take a replica from outside on a
+managed service either, so every round reads every key: a key the target is
+missing or holds otherwise is copied with `DUMP` and `RESTORE` with what's left
+of its time to live, and a key the source no longer has is removed from the
+target. The role needs `SCAN`, `DUMP` and `PTTL` on the source. URLs are
+`rediss://user:password@host:6379/0` (TLS; `?skip_verify=true` doesn't check
+the certificate). A cluster isn't supported, and the target can't run an older
+Redis than the source. Neither MySQL nor Redis has a way back yet, so a move
+with one has no `sync -back`, and `cutover -back` only checks the target took
+nothing since.
+
 `cutover` switches the records in `cutover` once every dataset has caught up
 and the health address answers. Stop the source's writers before you type its
 digest: it waits, checks nothing moved, sets the target's sequences, and only
@@ -135,7 +161,7 @@ and a cutover never read.
 
 None of this has run against a real cloud's database or DNS zone yet: it's
 tested against fakes, and the Postgres sync against two local Postgres 17
-servers.
+servers. The MySQL and Redis syncs haven't met a real server at all.
 
 ## Environment
 

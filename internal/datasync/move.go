@@ -206,8 +206,19 @@ func (m Move) check() error {
 				}
 				back++
 			}
+		case "mysql", "redis":
+			// Read from the environment as a Postgres URL is. Neither has a
+			// way back yet, so a move with one has none for its other
+			// databases either.
+			if !envPattern.MatchString(d.FromEnv) || !envPattern.MatchString(d.ToEnv) || !strings.HasPrefix(d.FromEnv, "SOURCE_") || !strings.HasPrefix(d.ToEnv, "TARGET_") {
+				return refused("dataset: a database takes from_env, a SOURCE_ name, and to_env, a TARGET_ name")
+			}
+			if d.From != "" || d.To != "" || d.Prefix != "" || d.Publication != "" || d.Slot != "" || d.BackEnv != "" || d.BackFromEnv != "" || d.Kind == "redis" && d.CopySchema {
+				return refused("dataset: mysql takes from_env, to_env and copy_schema, redis from_env and to_env, and nothing else")
+			}
+			databases++
 		default:
-			return refused("dataset kind: objects or postgres")
+			return refused("dataset kind: objects, postgres, mysql or redis")
 		}
 	}
 	// A way back is for the whole move: a return that carried one database's
@@ -230,7 +241,7 @@ func (m Move) digest() string { return transfer.Digest([]byte("move-v1"), m.raw)
 // file, only STANDBY_ keys in the environment when a reverse sync runs.
 func (m Move) Reversible() bool {
 	for _, d := range m.Datasets {
-		if d.Kind == "postgres" && d.BackEnv == "" {
+		if d.Kind != "objects" && d.BackEnv == "" {
 			return false
 		}
 	}

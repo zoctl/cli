@@ -129,6 +129,9 @@ func openBack(d Dataset, o Options, write bool) (dataset, error) {
 			return nil, nil
 		}
 		return openPostgresBack(d, o)
+	case "mysql", "redis":
+		// No way back yet: a return checks the target took nothing.
+		return nil, nil
 	}
 	return nil, ErrMove
 }

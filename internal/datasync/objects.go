@@ -38,6 +38,10 @@ func openDataset(d Dataset, o Options) (dataset, error) {
 		return newObjectSet(d.From+"\x00"+d.To, d.Prefix, src, dst), nil
 	case "postgres":
 		return openPostgres(d, o)
+	case "mysql":
+		return openMySQL(d, o)
+	case "redis":
+		return openRedis(d, o)
 	}
 	return nil, ErrMove
 }

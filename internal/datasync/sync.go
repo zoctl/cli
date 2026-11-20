@@ -31,7 +31,7 @@ const maxFailedRounds = 3
 // retryable reports whether the next round can make up for err: a storage
 // or database call that failed, not a refusal, a limit or a cancellation.
 func retryable(err error) bool {
-	return errors.Is(err, objects.ErrTransport) || errors.Is(err, objects.ErrStatus) || errors.Is(err, ErrPostgres)
+	return errors.Is(err, objects.ErrTransport) || errors.Is(err, objects.ErrStatus) || errors.Is(err, ErrPostgres) || errors.Is(err, ErrMySQL) || errors.Is(err, ErrRedis)
 }
 
 // dataset is one kind of copy. Plan and Check read both sides; Start, Round
@@ -162,7 +162,9 @@ type Options struct {
 	// keeps or prints what it returns.
 	Env    func(string) string
 	Client *http.Client
-	Now    func() time.Time
+	// Workspace is where a dataset that streams keeps how far it got.
+	Workspace *transfer.Workspace
+	Now       func() time.Time
 }
 
 // Open opens every dataset of m. A dataset's credential missing, or a spec
