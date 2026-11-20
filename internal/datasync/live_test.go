@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zoctl/cli/internal/pgwire"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/zoctl/cli/internal/transfer"
 )
@@ -33,7 +33,7 @@ type live struct {
 	mover    string // the source's database as the move's role
 	noise    string // another database on the source
 	slot     string
-	admin    map[string]*liveConn
+	admin    map[string]*pgx.Conn
 }
 
 func in(server, database string) string {
@@ -42,14 +42,14 @@ func in(server, database string) string {
 	return u.String()
 }
 
-func (l *live) conn(u string) *liveConn {
+func (l *live) conn(u string) *pgx.Conn {
 	l.t.Helper()
 	if c := l.admin[u]; c != nil {
 		return c
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	c, err := liveConnect(ctx, u)
+	c, err := pgx.Connect(ctx, u)
 	if err != nil {
 		// The error can carry the URL, and the URL a password.
 		l.t.Fatal("a live server didn't take the connection")
@@ -86,14 +86,14 @@ func newLive(t *testing.T) *live {
 	b := make([]byte, 4)
 	rand.Read(b)
 	name := "zoctl_live_" + hex.EncodeToString(b)
-	l := &live{t: t, src: in(source, name), dst: in(target, name), noise: in(source, name+"_noise"), slot: name, admin: map[string]*liveConn{}}
+	l := &live{t: t, src: in(source, name), dst: in(target, name), noise: in(source, name+"_noise"), slot: name, admin: map[string]*pgx.Conn{}}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		// A subscription is let go of its slot first, so dropping it
 		// asks nothing of the source.
 		for _, db := range []string{l.dst, in(target, name+"_other")} {
-			c, err := liveConnect(ctx, db)
+			c, err := pgx.Connect(ctx, db)
 			if err != nil {
 				continue
 			}
@@ -106,7 +106,7 @@ func newLive(t *testing.T) *live {
 			c.Close(ctx)
 		}
 		for server, dbs := range map[string][]string{source: {name, name + "_noise"}, target: {name, name + "_other"}} {
-			c, err := liveConnect(ctx, server)
+			c, err := pgx.Connect(ctx, server)
 			if err != nil {
 				continue
 			}
@@ -260,7 +260,7 @@ func TestLivePostgres(t *testing.T) {
 	// A transaction that has written and not committed: nothing has
 	// reached the slot or the counters, and the position still won't
 	// stay put.
-	open, err := liveConnect(ctx, l.src)
+	open, err := pgx.Connect(ctx, l.src)
 	if err != nil {
 		t.Fatal("a live server didn't take the connection")
 	}
@@ -337,50 +337,3 @@ func TestLivePostgres(t *testing.T) {
 		t.Fatal("the source took a write")
 	}
 }
-
-// liveConn is a test's own session on a live server, which may write and
-// take arguments in Exec.
-type liveConn struct{ c *pgwire.Conn }
-
-func liveConnect(ctx context.Context, u string) (*liveConn, error) {
-	cfg, err := pgwire.ParseURL(u)
-	if err != nil {
-		return nil, err
-	}
-	c, err := pgwire.Connect(ctx, cfg)
-	if err != nil {
-		return nil, err
-	}
-	return &liveConn{c}, nil
-}
-
-func (l *liveConn) Exec(ctx context.Context, sql string, args ...any) (struct{}, error) {
-	if len(args) == 0 {
-		return struct{}{}, l.c.Exec(ctx, sql)
-	}
-	_, err := l.c.Rows(ctx, sql, args...)
-	return struct{}{}, err
-}
-
-type liveRow struct {
-	rows [][]string
-	err  error
-}
-
-func (r liveRow) Scan(v *string) error {
-	if r.err != nil {
-		return r.err
-	}
-	if len(r.rows) == 0 || len(r.rows[0]) == 0 {
-		return errors.New("no rows")
-	}
-	*v = r.rows[0][0]
-	return nil
-}
-
-func (l *liveConn) QueryRow(ctx context.Context, sql string, args ...any) liveRow {
-	rows, err := l.c.Rows(ctx, sql, args...)
-	return liveRow{rows, err}
-}
-
-func (l *liveConn) Close(context.Context) { _ = l.c.Close() }

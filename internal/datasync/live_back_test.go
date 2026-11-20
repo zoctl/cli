@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/zoctl/cli/internal/transfer"
 	"github.com/zoctl/cli/internal/transfer/dns"
 )
@@ -35,13 +37,13 @@ func newTwoWay(t *testing.T) *twoWay {
 		defer cancel()
 		// The old side's subscription first, let go of its slot, or its
 		// database can't be dropped.
-		if c, err := liveConnect(ctx, l.src); err == nil {
+		if c, err := pgx.Connect(ctx, l.src); err == nil {
 			for _, sql := range []string{"ALTER SUBSCRIPTION zoctl_back_orders DISABLE", "ALTER SUBSCRIPTION zoctl_back_orders SET (slot_name = NONE)", "DROP SUBSCRIPTION zoctl_back_orders"} {
 				c.Exec(ctx, sql)
 			}
 			c.Close(ctx)
 		}
-		if c, err := liveConnect(ctx, l.dst); err == nil {
+		if c, err := pgx.Connect(ctx, l.dst); err == nil {
 			c.Exec(ctx, "SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name = 'zoctl_back_orders' AND NOT active AND database = current_database()")
 			c.Close(ctx)
 		}

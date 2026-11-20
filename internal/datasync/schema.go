@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/zoctl/cli/internal/pgwire"
+	"github.com/jackc/pgx/v5"
 )
 
 // copy_schema makes the published tables the target lacks from the
@@ -44,7 +44,7 @@ type ownedSeq struct {
 	options                         string
 }
 
-func (s ownedSeq) ident() string { return pgwire.Ident(s.schema, s.name) }
+func (s ownedSeq) ident() string { return pgx.Identifier{s.schema, s.name}.Sanitize() }
 
 var seqTypes = map[string]bool{"smallint": true, "integer": true, "bigint": true}
 
@@ -111,14 +111,14 @@ WHERE i.indrelid = to_regclass($1) AND i.indisprimary ORDER BY array_position(i.
 		}
 		ddl.schemas = append(ddl.schemas, s.schema)
 		ddl.before = append(ddl.before, "CREATE SEQUENCE IF NOT EXISTS "+s.ident()+" AS "+s.typ+" "+s.options)
-		ddl.after = append(ddl.after, "ALTER SEQUENCE "+s.ident()+" OWNED BY "+t.ident()+"."+pgwire.Ident(s.column))
+		ddl.after = append(ddl.after, "ALTER SEQUENCE "+s.ident()+" OWNED BY "+t.ident()+"."+pgx.Identifier{s.column}.Sanitize())
 	}
 	var parts []string
 	for _, c := range cols {
 		if len(c) != 6 || !typePattern.MatchString(c[1]) || strings.Contains(c[1], "--") {
 			return ddl, ErrPostgres
 		}
-		name := pgwire.Ident(c[0])
+		name := pgx.Identifier{c[0]}.Sanitize()
 		col := name + " " + c[1]
 		switch identity, generated, expr := c[3], c[4], c[5]; {
 		case generated == "s" || generated == "v":
@@ -151,7 +151,7 @@ WHERE i.indrelid = to_regclass($1) AND i.indisprimary ORDER BY array_position(i.
 	if len(pk) > 0 {
 		var names []string
 		for _, k := range pk {
-			names = append(names, pgwire.Ident(k[0]))
+			names = append(names, pgx.Identifier{k[0]}.Sanitize())
 		}
 		parts = append(parts, "PRIMARY KEY ("+strings.Join(names, ", ")+")")
 	}
@@ -166,7 +166,7 @@ WHERE conrelid = to_regclass($1) AND contype IN ('c', 'u', 'x', 'f') ORDER BY 1`
 		if len(c) != 3 {
 			return ddl, ErrPostgres
 		}
-		add := "ALTER TABLE " + t.ident() + " ADD CONSTRAINT " + pgwire.Ident(c[0]) + " " + c[2]
+		add := "ALTER TABLE " + t.ident() + " ADD CONSTRAINT " + pgx.Identifier{c[0]}.Sanitize() + " " + c[2]
 		if c[1] == "f" {
 			ddl.keys = append(ddl.keys, add)
 		} else {
@@ -235,7 +235,7 @@ func (p *pgSet) makeSchema(ctx context.Context) (int, error) {
 		for _, s := range append([]string{missing[i].schema}, ddl.schemas...) {
 			if !seen[s] {
 				seen[s] = true
-				schemas = append(schemas, "CREATE SCHEMA IF NOT EXISTS "+pgwire.Ident(s))
+				schemas = append(schemas, "CREATE SCHEMA IF NOT EXISTS "+pgx.Identifier{s}.Sanitize())
 			}
 		}
 		required = append(required, ddl.before...)

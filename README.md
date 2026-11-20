@@ -3,8 +3,8 @@
 The command line for the [zoctl console](https://app.zoctl.com), where
 [zoctl.com](https://zoctl.com) customers follow the moves of their
 infrastructure from one cloud to another. It signs a terminal in to your
-account and shows your organization's moves. Go standard library only, one
-binary, no cgo.
+account and shows your organization's moves, and it copies a move's data and
+switches its DNS where you run it, with your own keys. One binary, no cgo.
 
 ## Install
 
@@ -67,6 +67,9 @@ readable only by you. zoctl never prints it.
 | `zoctl open [ID]` | Open the console, or a move's page in it, in the browser. |
 | `zoctl logout` | End this terminal's session on the console and forget it here. |
 | `zoctl version` | Print the version. |
+| `zoctl sync -move FILE -workspace DIR` | Copy a move's databases and buckets to the target and keep them caught up, once you approve the plan it prints. `-check` only compares the two sides. |
+| `zoctl cutover -move FILE -workspace DIR` | Point the move's DNS at the target once the data has caught up, or back again with `-back`. |
+| `zoctl runner pair -console URL -contact URL -workspace DIR` | Let a workspace report its counts to the console (`-report` on `sync` and `cutover`). |
 
 `-json` prints what the console sent, for scripts:
 
@@ -79,6 +82,60 @@ account IDs or domains: your runner keeps those, and the plan, on your side.
 
 Exit status is 0 on success, 1 when something failed, 2 for a command line
 that couldn't be read and 130 when Ctrl-C stopped it.
+
+## Moving data and DNS
+
+`sync` and `cutover` don't use the console session. They run on your machine,
+with both sides' keys in the environment, and nothing they copy goes through
+zoctl. A move file names what to copy and the limits one approval covers,
+never a key:
+
+```json
+{"version": 1, "source": "aws", "target": "gcp",
+ "datasets": [
+  {"name": "uploads", "kind": "objects", "from": "s3://old-bucket?region=us-east-1", "to": "gs://new-bucket"},
+  {"name": "shop", "kind": "postgres", "from_env": "SOURCE_SHOP_URL", "to_env": "TARGET_SHOP_URL",
+   "publication": "zoctl", "slot": "zoctl", "copy_schema": true}],
+ "limits": {"max_objects": 1000000, "max_bytes": 500000000000, "hours": 72},
+ "cutover": {"zone": "clouddns://new-project/shop", "credentials": "TARGET",
+  "health": "https://new.shop.example.com/healthz",
+  "records": [{"name": "www.shop.example.com.", "type": "A", "ttl": 60, "values": ["198.51.100.20"]}]}}
+```
+
+Each run plans first: it prints counts and a digest, and changes nothing until
+you type the digest back. One approval runs once, and the workspace (a folder
+only you can read) remembers it across restarts. Output and the workspace hold
+counts, never a bucket, key, table or account.
+
+Keys come from `SOURCE_` and `TARGET_` variables and are taken out of the
+environment once read, so nothing the command starts inherits them. Buckets
+are S3 (`s3://bucket?region=r` with `SOURCE_AWS_ACCESS_KEY_ID` and
+`SOURCE_AWS_SECRET_ACCESS_KEY`, or `s3+https://host/bucket` for R2, Hetzner,
+OVHcloud and MinIO with `SOURCE_S3_ACCESS_KEY_ID` and
+`SOURCE_S3_SECRET_ACCESS_KEY`), Cloud Storage (`gs://bucket` with
+`SOURCE_GOOGLE_SERVICE_ACCOUNT_KEY`) and Azure Blob
+(`azblob://account/container` with `SOURCE_AZURE_TENANT_ID`,
+`SOURCE_AZURE_CLIENT_ID` and `SOURCE_AZURE_CLIENT_SECRET`), and the same
+names with `TARGET_` for the other side. The source's keys only ever read.
+
+A Postgres database moves by Postgres's own logical replication. You set up
+the source, since zoctl never changes it: `wal_level = logical`, a
+publication of the tables to move and a `pgoutput` slot, named in the
+dataset. Both URLs have to say `sslmode=require`, `verify-ca` or
+`verify-full`; a URL that could fall back to plaintext is refused. zoctl makes
+the subscription on the target and, with `copy_schema`, the missing tables.
+
+`cutover` switches the records in `cutover` once every dataset has caught up
+and the health address answers. Stop the source's writers before you type its
+digest: it waits, checks nothing moved, sets the target's sequences, and only
+then changes DNS. For 30 days, or the move's `return_days`, `zoctl cutover
+-back` puts the records back, and `zoctl sync -back` copies what the target
+took to the old side first, with keys from `STANDBY_` variables that a sync
+and a cutover never read.
+
+None of this has run against a real cloud's database or DNS zone yet: it's
+tested against fakes, and the Postgres sync against two local Postgres 17
+servers.
 
 ## Environment
 

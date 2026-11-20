@@ -15,7 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zoctl/cli/internal/pgwire"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/zoctl/cli/internal/transfer"
 )
 
@@ -95,13 +97,18 @@ const connectTimeout = 30 * time.Second
 // server that says it has no TLS, which is whoever sits between the two, and
 // the password and every row then cross in the clear. The same URL is the one
 // a subscription's server dials with, so the rule covers that hop too.
-func pgConfig(url string) (*pgwire.Config, error) {
-	cfg, err := pgwire.ParseURL(url)
-	if errors.Is(err, pgwire.ErrPlain) {
-		return nil, ErrPlainDatabase
-	}
+func pgConfig(url string) (*pgx.ConnConfig, error) {
+	cfg, err := pgx.ParseConfig(url)
 	if err != nil {
 		return nil, ErrMove
+	}
+	if cfg.TLSConfig == nil {
+		return nil, ErrPlainDatabase
+	}
+	for _, fb := range cfg.Fallbacks {
+		if fb.TLSConfig == nil {
+			return nil, ErrPlainDatabase
+		}
 	}
 	return cfg, nil
 }
@@ -117,36 +124,57 @@ var connect = func(ctx context.Context, url string, readOnly bool) (targetDB, er
 		cfg.ConnectTimeout = connectTimeout
 	}
 	// literal quotes for standard strings, whatever the role's default is.
-	cfg.Params["standard_conforming_strings"] = "on"
+	cfg.RuntimeParams["standard_conforming_strings"] = "on"
 	if readOnly {
-		cfg.Params["default_transaction_read_only"] = "on"
+		cfg.RuntimeParams["default_transaction_read_only"] = "on"
 	}
-	cfg.Params["application_name"] = "zoctl"
-	c, err := pgwire.Connect(ctx, cfg)
+	cfg.RuntimeParams["application_name"] = "zoctl"
+	c, err := pgx.ConnectConfig(ctx, cfg)
 	if err != nil {
 		return nil, ErrPostgres
 	}
-	return wireDB{c}, nil
+	return pgxDB{c}, nil
 }
 
-type wireDB struct{ c *pgwire.Conn }
+type pgxDB struct{ c *pgx.Conn }
 
-func (p wireDB) Rows(ctx context.Context, sql string, args ...any) ([][]string, error) {
-	rows, err := p.c.Rows(ctx, sql, args...)
+func (p pgxDB) Rows(ctx context.Context, sql string, args ...any) ([][]string, error) {
+	rows, err := p.c.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, ErrPostgres
 	}
-	return rows, nil
+	defer rows.Close()
+	var out [][]string
+	for rows.Next() {
+		n := len(rows.FieldDescriptions())
+		vals := make([]pgtype.Text, n)
+		dest := make([]any, n)
+		for i := range vals {
+			dest[i] = &vals[i]
+		}
+		if rows.Scan(dest...) != nil {
+			return nil, ErrPostgres
+		}
+		row := make([]string, n)
+		for i, v := range vals {
+			row[i] = v.String
+		}
+		out = append(out, row)
+	}
+	if rows.Err() != nil {
+		return nil, ErrPostgres
+	}
+	return out, nil
 }
 
-func (p wireDB) Exec(ctx context.Context, sql string) error {
-	if err := p.c.Exec(ctx, sql); err != nil {
+func (p pgxDB) Exec(ctx context.Context, sql string) error {
+	if _, err := p.c.Exec(ctx, sql); err != nil {
 		return ErrPostgres
 	}
 	return nil
 }
 
-func (p wireDB) Close() { _ = p.c.Close() }
+func (p pgxDB) Close() { _ = p.c.Close(context.Background()) }
 
 // readOnly hides a connection's Exec, so the source's type has no way to
 // write.
@@ -159,7 +187,7 @@ const thisDatabase = "subdbid = (SELECT oid FROM pg_database WHERE datname = cur
 
 type table struct{ schema, name string }
 
-func (t table) ident() string { return pgwire.Ident(t.schema, t.name) }
+func (t table) ident() string { return pgx.Identifier{t.schema, t.name}.Sanitize() }
 
 // pgSet is one published database replicated to a target database.
 type pgSet struct {
@@ -486,7 +514,7 @@ func (p *pgSet) subscribe(ctx context.Context, statement string) error {
 func (p *pgSet) Start(ctx context.Context, plan DatasetPlan, _ *transfer.Budget) (DatasetStatus, error) {
 	st := DatasetStatus{Kind: "postgres", Findings: plan.Findings}
 	state, _ := plan.work.(string)
-	sub := pgwire.Ident(p.sub)
+	sub := pgx.Identifier{p.sub}.Sanitize()
 	if strings.HasPrefix(state, "resume:") {
 		if p.twoWay {
 			// A subscription made before the move file had a way back
@@ -503,7 +531,7 @@ func (p *pgSet) Start(ctx context.Context, plan DatasetPlan, _ *transfer.Budget)
 		// and nothing is copied.
 		return st, p.subscribe(ctx, "CREATE SUBSCRIPTION "+sub+
 			" CONNECTION "+literal(p.sourceURL)+
-			" PUBLICATION "+pgwire.Ident(p.publication)+
+			" PUBLICATION "+pgx.Identifier{p.publication}.Sanitize()+
 			" WITH (slot_name = "+literal(p.slot)+", create_slot = false, copy_data = false, enabled = true, origin = none)")
 	}
 	if p.copySchema && plan.Copy > 0 {
@@ -525,7 +553,7 @@ func (p *pgSet) Start(ctx context.Context, plan DatasetPlan, _ *transfer.Budget)
 	}
 	err := p.subscribe(ctx, "CREATE SUBSCRIPTION "+sub+
 		" CONNECTION "+literal(p.sourceURL)+
-		" PUBLICATION "+pgwire.Ident(p.publication)+
+		" PUBLICATION "+pgx.Identifier{p.publication}.Sanitize()+
 		" WITH ("+with+")")
 	return st, err
 }
@@ -600,7 +628,7 @@ func (p *pgSet) makeBack(ctx context.Context) error {
 	for _, t := range p.tables {
 		names = append(names, t.ident())
 	}
-	if err := p.dst.Exec(ctx, "CREATE PUBLICATION "+pgwire.Ident(p.backName)+" FOR TABLE "+strings.Join(names, ", ")); err != nil {
+	if err := p.dst.Exec(ctx, "CREATE PUBLICATION "+pgx.Identifier{p.backName}.Sanitize()+" FOR TABLE "+strings.Join(names, ", ")); err != nil {
 		return err
 	}
 	_, _, err := one(p.dst.Rows(ctx, "SELECT lsn::text FROM pg_create_logical_replication_slot($1, 'pgoutput')", p.backName))
@@ -630,7 +658,7 @@ func (p *pgSet) endBack(ctx context.Context) error {
 			return err
 		}
 	}
-	return p.dst.Exec(ctx, "DROP PUBLICATION IF EXISTS "+pgwire.Ident(p.backName))
+	return p.dst.Exec(ctx, "DROP PUBLICATION IF EXISTS "+pgx.Identifier{p.backName}.Sanitize())
 }
 
 // progress reads replication progress: tables ready, the slot's lag in
@@ -778,7 +806,7 @@ func (p *pgSet) stop(ctx context.Context) error {
 	if err != nil || !exists {
 		return err
 	}
-	return p.dst.Exec(ctx, "ALTER SUBSCRIPTION "+pgwire.Ident(p.sub)+" DISABLE")
+	return p.dst.Exec(ctx, "ALTER SUBSCRIPTION "+pgx.Identifier{p.sub}.Sanitize()+" DISABLE")
 }
 
 // nothingPending reports whether the slot holds no change the publication
@@ -817,7 +845,7 @@ func (p *pgSet) nothingPending(ctx context.Context, active bool) bool {
 		// What the other direction brought here isn't this one's to send.
 		peek = "SELECT count(*)::text FROM pg_logical_slot_peek_binary_changes($1, NULL, 1, 'proto_version', '1', 'publication_names', $2, 'origin', 'none')"
 	}
-	n, ok, err := one(p.src.Rows(ctx, peek, p.slot, pgwire.Ident(p.publication)))
+	n, ok, err := one(p.src.Rows(ctx, peek, p.slot, pgx.Identifier{p.publication}.Sanitize()))
 	return err == nil && ok && n == "0"
 }
 
@@ -874,7 +902,7 @@ func (p *pgSet) Sequences(ctx context.Context) (int, error) {
 		if len(r) != 2 {
 			return 0, ErrPostgres
 		}
-		reg, _, err := one(p.dst.Rows(ctx, "SELECT coalesce(to_regclass($1)::text, '')", pgwire.Ident(r[0], r[1])))
+		reg, _, err := one(p.dst.Rows(ctx, "SELECT coalesce(to_regclass($1)::text, '')", pgx.Identifier{r[0], r[1]}.Sanitize()))
 		if err != nil {
 			return 0, err
 		}
@@ -893,7 +921,7 @@ func (p *pgSet) Sequences(ctx context.Context) (int, error) {
 		if err != nil {
 			return n, ErrPostgres
 		}
-		seq := pgwire.Ident(r[0], r[1])
+		seq := pgx.Identifier{r[0], r[1]}.Sanitize()
 		reg, _, err := one(p.dst.Rows(ctx, "SELECT coalesce(to_regclass($1)::text, '')", seq))
 		if err != nil {
 			return n, err
