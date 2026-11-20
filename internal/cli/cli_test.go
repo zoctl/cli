@@ -419,3 +419,21 @@ func TestWhatTheConsoleSaysCannotDriveTheTerminal(t *testing.T) {
 		t.Fatalf("plain changed a name: %q", got)
 	}
 }
+
+// The move commands are on the customer's command line, and a bad one says
+// so without running anything.
+func TestMoveCommands(t *testing.T) {
+	h := newHarness(t)
+	if code := h.run("help"); code != 0 || !strings.Contains(h.out.String(), "zoctl sync -move") || !strings.Contains(h.out.String(), "zoctl cutover -move") || !strings.Contains(h.out.String(), "zoctl runner pair") {
+		t.Fatalf("help %d:\n%s", code, h.out)
+	}
+	if code := h.run("sync"); code != 1 || !strings.Contains(h.err.String(), "was refused") {
+		t.Fatalf("sync with no move: %d %s", code, h.err)
+	}
+	if code := h.run("cutover", "-move", filepath.Join(t.TempDir(), "gone.json"), "-workspace", t.TempDir()); code != 1 || !strings.Contains(h.out.String(), "move file was refused") {
+		t.Fatalf("cutover with a missing file: %d %s %s", code, h.out, h.err)
+	}
+	if code := h.run("runner"); code != 2 {
+		t.Fatalf("runner alone: %d", code)
+	}
+}

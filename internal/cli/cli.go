@@ -19,17 +19,20 @@ import (
 
 	"github.com/zoctl/cli/internal/api"
 	"github.com/zoctl/cli/internal/creds"
+	"github.com/zoctl/cli/internal/movecmd"
 )
 
 // App is one run of the command line, with everything it touches outside.
 type App struct {
 	Version string
-	Stdout  io.Writer
-	Stderr  io.Writer
-	Getenv  func(string) string
-	HTTP    *http.Client
-	Store   creds.Store
-	Now     func() time.Time
+	// Stdin is where an approval is typed. Nil reads nothing.
+	Stdin  io.Reader
+	Stdout io.Writer
+	Stderr io.Writer
+	Getenv func(string) string
+	HTTP   *http.Client
+	Store  creds.Store
+	Now    func() time.Time
 	// Open shows a page in the browser. Nil opens nothing.
 	Open func(url string) error
 	// Sleep waits between questions while signing in.
@@ -40,7 +43,8 @@ type App struct {
 // already.
 var errUsage = errors.New("usage")
 
-const usage = `zoctl signs in to the zoctl console and shows your organization's moves.
+const usage = `zoctl signs in to the zoctl console, shows your organization's moves, and
+runs a move's data sync and DNS cutover where you run it.
 
 Usage:
   zoctl login [-no-browser]   sign this terminal in with a code typed in the browser
@@ -50,6 +54,15 @@ Usage:
   zoctl open [ID]             open the console, or a move's page, in the browser
   zoctl logout                sign this terminal out
   zoctl version               print the version
+
+Moving data and DNS, with both sides' keys in the environment:
+  zoctl sync -move FILE (-workspace DIR [-every 5m] [-rounds N] [-report] [-back] | -check)
+                              copy a move's databases and buckets to the target,
+                              after you approve the plan it prints
+  zoctl cutover -move FILE -workspace DIR [-settle 1m] [-back] [-report]
+                              point the move's DNS at the target, or back again
+  zoctl runner pair -console URL -contact URL -workspace DIR
+                              let this workspace report its counts to the console
 
 Environment:
   ZOCTL_CONSOLE     the console to sign in to (default ` + api.DefaultConsole + `)
@@ -69,6 +82,19 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		"moves":  a.moves,
 		"move":   a.move,
 		"open":   a.open,
+		"sync": func(_ context.Context, args []string) error {
+			return movecmd.Sync(args, a.Stdout, a.stdin())
+		},
+		"cutover": func(_ context.Context, args []string) error {
+			return movecmd.Cutover(args, a.Stdout, a.stdin())
+		},
+		"runner": func(_ context.Context, args []string) error {
+			if len(args) == 0 || args[0] != "pair" {
+				fmt.Fprintf(a.Stderr, "zoctl: runner takes one command, pair.\n\n%s", usage)
+				return errUsage
+			}
+			return movecmd.PairRunner(args[1:], a.Stdout, a.stdin())
+		},
 		"version": func(context.Context, []string) error {
 			fmt.Fprintf(a.Stdout, "zoctl %s\n", a.Version)
 			return nil
@@ -101,9 +127,18 @@ func (a *App) Run(ctx context.Context, args []string) int {
 	}
 }
 
+func (a *App) stdin() io.Reader {
+	if a.Stdin == nil {
+		return strings.NewReader("")
+	}
+	return a.Stdin
+}
+
 // say is an error in words for a person.
 func say(err error) string {
 	switch {
+	case errors.Is(err, movecmd.ErrConfig):
+		return "that command line, move file or workspace was refused. Run zoctl help for the flags."
 	case errors.Is(err, api.ErrSignedOut):
 		return "this terminal isn't signed in. Run zoctl login."
 	case errors.Is(err, errLocked):
